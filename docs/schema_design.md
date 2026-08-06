@@ -20,7 +20,7 @@
 | `address_en` | `aren` | 地址（英文） |
 | `latitude` | `latitude` | 緯度 |
 | `longitude` | `longitude` | 經度 |
-| `quantity` | `Quantity` | 總車柱數 |
+| `quantity` | `Quantity` | 車柱總數。⚠️ 非可用容量，見第三節 gap 說明 |
 | `first_seen_at` | — | 首次觀測到此站的時間 |
 | `last_seen_at` | — | 最近一次觀測到此站的時間 |
 
