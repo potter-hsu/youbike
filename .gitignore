@@ -1,9 +1,8 @@
 .venv/
 data/
+logs/
 __pycache__/
 .ipynb_checkpoints/
 .env
 explore*.ipynb
 專案計畫_YouBike.md
-logs/
-.env
