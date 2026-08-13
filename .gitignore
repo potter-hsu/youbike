@@ -6,4 +6,4 @@ __pycache__/
 explore*.ipynb
 專案計畫_YouBike.md
 logs/
-src/load.py
+.env
