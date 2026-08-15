@@ -9,6 +9,8 @@
 | 2026-08-06 | 初版 | — |
 | 2026-08-06 | 時區決策定案（`TIMESTAMPTZ` + Python 端標記） | 原留白待查證 |
 | 2026-08-10 | 補上決策 7（型別與約束）、決策 8（外鍵代價） | `schema.sql` 實作後回填 |
+| 2026-08-13 | 補上決策 9（資料延遲不在寫入時過濾） | `load.py` 實作前必須決定 |
+| 2026-08-14 | 補上決策 10（`fetched_at` / `loaded_at` 分離），`snapshots` 新增 `loaded_at` | 實測發現兩種延遲被混為一談 |
 
 ---
 
@@ -28,8 +30,8 @@
 | `latitude` | `latitude` | 緯度 |
 | `longitude` | `longitude` | 經度 |
 | `quantity` | `Quantity` | 車柱總數。⚠️ **非可用容量**，見第三節 gap 說明 |
-| `first_seen_at` | — | 首次觀測到此站的時間 |
-| `last_seen_at` | — | 最近一次觀測到此站的時間 |
+| `first_seen_at` | `DEFAULT now()` | 首次觀測到此站的時間，**upsert 時不更新** |
+| `last_seen_at` | `now()` | 最近一次觀測到此站的時間 |
 
 **SCD 策略：覆蓋更新（Type 1）**，不保留歷史版本。
 理由：站名變更、站點遷移、車柱擴充皆為低頻事件，第 1 週不值得為此增加複雜度。
@@ -47,10 +49,15 @@
 | `available_rent_bikes` | `available_rent_bikes` | 可借車輛數 |
 | `available_return_bikes` | `available_return_bikes` | 可還空位數 |
 | `act` | `act` | 站點啟用狀態（'0' / '1'） |
-| `first_fetched_at` | — | 首次抓到這筆資料的時間 |
-| `last_fetched_at` | — | 最後一次抓到這筆資料的時間 |
+| `first_fetched_at` | **檔名解析** | 首次抓到這筆資料的時間，**upsert 時不更新** |
+| `last_fetched_at` | **檔名解析** | 最後一次抓到這筆資料的時間 |
+| `loaded_at` | `DEFAULT now()` | 最後一次寫入資料庫的時間 |
 
 **主鍵：`(sno, info_time)`**
+
+> ⚠️ `first_fetched_at` / `last_fetched_at` **不設 `DEFAULT`**。
+> 值應由程式從檔名提供；留著 DEFAULT 會在漏傳時安靜填入 `now()`，
+> 造成與決策 10 要修正的同一個錯誤。
 
 ---
 
@@ -71,7 +78,7 @@
 | `rows_updated` | 更新了幾列（撞主鍵） |
 | `error_message` | 失敗原因，成功則為 NULL |
 
-> ⚠️ **待補：** 上表是初版，是否還需要其他欄位待 `load.py` 實作時確認。
+> ⚠️ **尚未實作寫入。** 上表為初版設計，欄位是否完備待實作時確認。
 > 判準：第 6 週要能只靠這張表回答「系統過去 24 小時正常嗎」。
 
 ---
@@ -112,12 +119,24 @@ API 仍每次照常回傳，外觀與正常站無異。
 
 **附加價值：** `last_fetched_at - info_time` 即為該站的資料延遲，
 不需另外計算，資料新鮮度監控可直接查詢。
+（此式成立的前提見決策 10。）
 
 實作對應 PostgreSQL 的 `INSERT ... ON CONFLICT DO UPDATE`（upsert）。
 
-> ⚠️ 實作細節：`DEFAULT now()` 僅在 INSERT 時生效。
-> UPDATE 時必須在 upsert 語句中明確寫 `SET last_fetched_at = now()`，
-> 且**只更新此欄**——資料本身沒變，變的只是「我又看到它一次」。
+**upsert 語句：**
+```sql
+ON CONFLICT (sno, info_time) DO UPDATE SET
+    last_fetched_at = EXCLUDED.last_fetched_at,
+    loaded_at       = now()
+```
+
+> ⚠️ 兩個實作要點：
+> 1. `first_fetched_at` **不出現在 SET 裡**——一旦更新即永久失去「首次觀測」資訊
+> 2. `last_fetched_at` 用 `EXCLUDED.last_fetched_at`（新檔案的抓取時間），
+>    **不是 `now()`**。理由見決策 10
+
+**8/14 實測驗證：** 東門站在 `snapshots` 中僅 1 列，
+`last_fetched_at - info_time` = 532 天 14 小時，符合設計預期。
 
 ---
 
@@ -233,7 +252,7 @@ API 仍每次照常回傳，外觀與正常站無異。
 保證 `snapshots` 不會出現未知站點的觀測值。
 
 **代價：寫入有順序依賴**——新站必須先寫入 `stations` 才能寫 `snapshots`，
-否則違反外鍵約束。`load.py` 實作時需注意寫入順序。
+否則違反外鍵約束。`load.py` 中兩次 `executemany` 的順序不可對調。
 
 ---
 
@@ -257,6 +276,52 @@ API 仍每次照常回傳，外觀與正常站無異。
 
 **與既有決策的一致性：** 同「raw 存 `response.text`」「`act` 不轉 boolean」，
 皆為「先照收，解讀留給查詢層」原則的應用。
+
+---
+
+### 決策 10：`fetched_at` 與 `loaded_at` 分離
+
+**問題發現：** 8/13 用 8/10 的檔案測試 load，
+查詢 `last_fetched_at - info_time` 得到「1784 站全部 stale」。
+實際原因是 `last_fetched_at` 填的是 `now()`（入庫時刻），
+混入了三天的處理延遲。
+
+**兩種延遲的性質不同：**
+
+| 算式 | 意義 | 影響 |
+|---|---|---|
+| `last_fetched_at - info_time` | 資料延遲：該站多久沒回報 | 分析正確性（篩除失效觀測） |
+| `loaded_at - last_fetched_at` | 處理延遲：檔案躺多久才入庫 | 系統健康監控 |
+
+**決定：**
+- `first_fetched_at` / `last_fetched_at` 由**檔名解析**（`%Y%m%dT%H%M%z`），非 `now()`
+- 新增 `loaded_at`，用 `DEFAULT now()`
+- 前兩者移除 `DEFAULT`——值應由程式提供，留著 DEFAULT 會在漏傳時安靜填入錯誤值
+
+**為何不採用「讓 load 緊跟 fetch，時間差可忽略」：**
+該方案將兩種延遲壓成一個數字，靠假設維持正確性。
+若 load 中斷數小時後補跑，該區間的 `data_lag` 會虛增，
+且**無法從資料中看出**——第 4 週若以 lag 門檻篩選樣本，會誤刪一批完好的觀測。
+
+**與既有原則一致：** 同「先照收，解讀留給查詢層」，不在寫入時壓縮資訊。
+
+**8/14 實測驗證：**
+```
+ data_lag |      process_lag
+----------+------------------------
+ 00:01:58 | 4 days 21:52:06.849042
+ 00:08:42 | 4 days 21:52:06.849042
+ 00:14:55 | 4 days 21:52:06.849042
+```
+`data_lag` 各站不同（1~15 分鐘，真實回報延遲）；
+`process_lag` 全部相同（該批檔案的入庫延遲）。兩者成功分離。
+
+> 實作細節：`now()` 回傳**交易開始時間**，同一 transaction 內多次呼叫值相同
+> （上表微秒完全一致即為此故）。
+> 這正是所需行為——一次 load 即一個處理事件，該批所有列應共用時間戳。
+> （若需逐次求值為 `clock_timestamp()`。）
+
+---
 
 ## 三、已知資料特性（影響後續建模）
 
@@ -312,6 +377,10 @@ timezone 設定」補值。本機為 Asia/Taipei、EC2 預設為 UTC，同一份
 在 Python 端明確標記後，資料庫收到的已是帶時區的值，
 正確性不依賴部署環境的設定。
 
+**實作：**
+- `info_time`：`strptime(..., "%Y-%m-%d %H:%M:%S")` → `.replace(tzinfo=ZoneInfo("Asia/Taipei"))`
+- `fetched_at`：`strptime(..., "%Y%m%dT%H%M%z")` —— `%z` 直接解析檔名中的 `+0800`，無需 replace
+
 **替代方案（未採用）：** 用 `TIMESTAMP` 並全系統約定台北時間。
 較簡單，但該約定只存在文件中、無機制強制，
 且第 3 週接入氣象署資料後將有多種時間格式並存，靠約定難以維持。
@@ -330,6 +399,10 @@ timezone 設定」補值。本機為 Asia/Taipei、EC2 預設為 UTC，同一份
 
 ## 四、待驗證 / 待決定
 
-- [ ] `fetch_log` 欄位是否完備（判準：能否單獨回答「系統過去 24 小時正常嗎」）
+- [ ] `fetch_log` 寫入尚未實作；欄位是否完備待驗證
+      （判準：能否單獨回答「系統過去 24 小時正常嗎」）
+- [ ] `load.py` 觸發方式：獨立 cron vs 由 `fetch.py` 呼叫
+- [ ] `schema.sql` 目前不可重複執行（表已存在會報錯）。
+      第 3 週在 EC2 建庫前需處理：`IF NOT EXISTS` 或 `DROP ... CASCADE`，各有取捨
 - [ ] `Quantity` 長期穩定性（累積 2 週資料後複驗，約 8/20）
 - [ ] `gap` 的日內週期性（驗證電輔車假說，非優先）
