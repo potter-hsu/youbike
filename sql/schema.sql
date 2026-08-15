@@ -28,8 +28,9 @@ CREATE TABLE snapshots (
     available_rent_bikes   integer     NOT NULL,
     available_return_bikes integer     NOT NULL,
     act                    text        NOT NULL,
-    first_fetched_at       timestamptz NOT NULL DEFAULT now(),
-    last_fetched_at        timestamptz NOT NULL DEFAULT now(),
+    first_fetched_at       timestamptz NOT NULL,
+    last_fetched_at        timestamptz NOT NULL,
+    loaded_at              timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (sno, info_time)
 );
 

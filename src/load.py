@@ -12,6 +12,9 @@ load_dotenv()
 BASE = Path(__file__).parent.parent
 RAW_DIR = BASE / "data" / "raw"
 file_path = RAW_DIR / "youbike_20260810T1600+0800.json"
+stem = file_path.stem        
+ts_part = stem.split("_", 1)[1] 
+fetched_at = datetime.strptime(ts_part, "%Y%m%dT%H%M%z")
 with open(file_path, "r", encoding="utf-8") as f:
     data = json.load(f)
 stations_rows = []
@@ -19,6 +22,8 @@ for station in data:
     result = itemgetter('sno', 'sna', 'snaen', 'sarea', 'sareaen', 'ar',
                          'aren', 'latitude', 'longitude', 'Quantity')(station)
     stations_rows.append(result)
+
+
 
 STATIONS_SQL = """
             INSERT INTO stations (sno, name_zh, name_en, area_zh, area_en, address_zh, address_en, latitude, longitude, quantity)
@@ -48,11 +53,17 @@ for snapshot in data:
         snapshot["available_rent_bikes"],
         snapshot["available_return_bikes"],
         snapshot["act"],
+        fetched_at,
+        fetched_at
     ))
 SNAPSHOTS_SQL = """
-            INSERT INTO snapshots (sno, info_time, available_rent_bikes, available_return_bikes, act)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (sno, info_time) DO UPDATE SET last_fetched_at = now()
+            INSERT INTO snapshots (sno, info_time, available_rent_bikes,
+                       available_return_bikes, act,
+                       first_fetched_at, last_fetched_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (sno, info_time) DO UPDATE SET
+                last_fetched_at = EXCLUDED.last_fetched_at,
+                loaded_at       = now()
             """
 
 with psycopg.connect(f"host=localhost port=5432 dbname=youbike user=postgres password={os.getenv('DB_PASSWORD')}") as conn:
