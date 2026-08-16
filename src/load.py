@@ -8,22 +8,8 @@ from dotenv import load_dotenv
 from operator import itemgetter
 
 load_dotenv()
-
 BASE = Path(__file__).parent.parent
 RAW_DIR = BASE / "data" / "raw"
-file_path = RAW_DIR / "youbike_20260810T1600+0800.json"
-stem = file_path.stem        
-ts_part = stem.split("_", 1)[1] 
-fetched_at = datetime.strptime(ts_part, "%Y%m%dT%H%M%z")
-with open(file_path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-stations_rows = []
-for station in data:
-    result = itemgetter('sno', 'sna', 'snaen', 'sarea', 'sareaen', 'ar',
-                         'aren', 'latitude', 'longitude', 'Quantity')(station)
-    stations_rows.append(result)
-
-
 
 STATIONS_SQL = """
             INSERT INTO stations (sno, name_zh, name_en, area_zh, area_en, address_zh, address_en, latitude, longitude, quantity)
@@ -41,21 +27,6 @@ STATIONS_SQL = """
             last_seen_at = now()
             """
 
-
-snapshot_rows = []
-for snapshot in data:
-    naive = datetime.strptime(snapshot["infoTime"], "%Y-%m-%d %H:%M:%S")
-    info_time = naive.replace(tzinfo=ZoneInfo("Asia/Taipei"))
-    
-    snapshot_rows.append((
-        snapshot["sno"],
-        info_time,  
-        snapshot["available_rent_bikes"],
-        snapshot["available_return_bikes"],
-        snapshot["act"],
-        fetched_at,
-        fetched_at
-    ))
 SNAPSHOTS_SQL = """
             INSERT INTO snapshots (sno, info_time, available_rent_bikes,
                        available_return_bikes, act,
@@ -66,11 +37,43 @@ SNAPSHOTS_SQL = """
                 loaded_at       = now()
             """
 
-with psycopg.connect(f"host=localhost port=5432 dbname=youbike user=postgres password={os.getenv('DB_PASSWORD')}") as conn:
-    with conn.cursor() as cur:
-        cur.executemany(STATIONS_SQL, stations_rows)
-        cur.executemany(SNAPSHOTS_SQL, snapshot_rows)
+
+def load_one_file(file_path, cur):
+    stem = file_path.stem        
+    ts_part = stem.split("_", 1)[1] 
+    fetched_at = datetime.strptime(ts_part, "%Y%m%dT%H%M%z")
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    stations_rows = []
+    for station in data:
+        result = itemgetter('sno', 'sna', 'snaen', 'sarea', 'sareaen', 'ar',
+                            'aren', 'latitude', 'longitude', 'Quantity')(station)
+        stations_rows.append(result)
+
+    snapshot_rows = []
+    for snapshot in data:
+        naive = datetime.strptime(snapshot["infoTime"], "%Y-%m-%d %H:%M:%S")
+        info_time = naive.replace(tzinfo=ZoneInfo("Asia/Taipei"))
+        
+        snapshot_rows.append((
+            snapshot["sno"],
+            info_time,  
+            snapshot["available_rent_bikes"],
+            snapshot["available_return_bikes"],
+            snapshot["act"],
+            fetched_at,
+            fetched_at
+        ))
+    cur.executemany(STATIONS_SQL, stations_rows)
+    cur.executemany(SNAPSHOTS_SQL, snapshot_rows)
+
+def main():
+    files = sorted(RAW_DIR.glob("youbike_*.json"))[-100:]
+    with psycopg.connect(f"host=localhost port=5432 dbname=youbike user=postgres password={os.getenv('DB_PASSWORD')}") as conn:
+        with conn.cursor() as cur:
+            for f in files:
+                load_one_file(f, cur)
         conn.commit()
-        cur.execute("SELECT count(*) FROM snapshots;")
-        result = cur.fetchone()
-        print(result)
+
+if __name__ == "__main__":
+    main()

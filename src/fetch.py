@@ -1,4 +1,5 @@
 import requests, time
+from load import main
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -29,3 +30,4 @@ with open(path, "w", encoding="utf-8") as f:
     f.write(response.text)
 
 print(f"{now.isoformat()} saved {path.name} ({len(response.text)} bytes)")
+main()
