@@ -72,7 +72,10 @@ def main():
     with psycopg.connect(f"host=localhost port=5432 dbname=youbike user=postgres password={os.getenv('DB_PASSWORD')}") as conn:
         with conn.cursor() as cur:
             for f in files:
-                load_one_file(f, cur)
+                try:
+                    load_one_file(f, cur)
+                except json.JSONDecodeError as e:
+                    print(f"SKIP broken file: {f.name} ({e})")
         conn.commit()
 
 if __name__ == "__main__":
