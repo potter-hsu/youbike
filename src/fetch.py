@@ -11,9 +11,12 @@ def fetch_with_retry():
         try:
             response = requests.get(URL, timeout=10)
             response.raise_for_status()
+            response.json()
             return response
         
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        except (requests.exceptions.Timeout, 
+                requests.exceptions.ConnectionError, 
+                requests.exceptions.JSONDecodeError):
             if i != 2:
                 time.sleep(2**i)
             else:

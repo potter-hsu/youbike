@@ -1,13 +1,11 @@
 import json
 import psycopg
-import os
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from dotenv import load_dotenv
 from operator import itemgetter
+from db import connect
 
-load_dotenv()
 BASE = Path(__file__).parent.parent
 RAW_DIR = BASE / "data" / "raw"
 
@@ -69,7 +67,7 @@ def load_one_file(file_path, cur):
 
 def main():
     files = sorted(RAW_DIR.glob("youbike_*.json"))[-100:]
-    with psycopg.connect(f"host=localhost port=5432 dbname=youbike user=postgres password={os.getenv('DB_PASSWORD')}") as conn:
+    with connect() as conn:
         with conn.cursor() as cur:
             for f in files:
                 try:

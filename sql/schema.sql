@@ -47,9 +47,20 @@ CREATE TABLE fetch_log (
     duration_ms       integer,
     status_code       integer,
     etag              text,
+    content_length    integer,
     update_time       timestamptz,
     stations_received integer,
-    rows_inserted     integer,
-    rows_updated      integer,
+    saved_file        text,
     error_message     text
+);
+
+CREATE TABLE load_log (
+    load_id         bigserial PRIMARY KEY,
+    fetch_id        bigint REFERENCES fetch_log(fetch_id),
+    started_at      timestamptz NOT NULL DEFAULT now(),
+    duration_ms     integer,
+    files_processed integer,
+    files_skipped   integer,
+    rows_affected   integer,
+    error_message   text
 );
