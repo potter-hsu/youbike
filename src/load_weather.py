@@ -1,10 +1,42 @@
 import json
+import gzip
 from pathlib import Path
 from datetime import datetime
 from db import connect
 
 BASE = Path(__file__).parent.parent
 WEATHER_DIR = BASE / "data" / "weather"
+
+
+# ── 檔案存取 ────────────────────────────────────────────
+
+def open_maybe_gz(path):
+    """依副檔名決定用 gzip 還是一般開檔。
+    gzip 預設為 binary 模式，需明確指定 'rt' 才能給 json.load。"""
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8")
+    return open(path, "r", encoding="utf-8")
+
+
+def fetched_at_from(path):
+    """檔名 rain_20260820T1451+0800.json[.gz] → aware datetime
+
+    ⚠️ 不可用 path.stem：.json.gz 的 stem 是 rain_XXX.json，
+    只會剝掉最後一層副檔名。改取第一個 '.' 之前的部分。"""
+    ts = path.name.split(".", 1)[0].split("_", 1)[1]
+    return datetime.strptime(ts, "%Y%m%dT%H%M%z")
+
+
+def find_obs_counterpart(rain_path):
+    """由 rain 檔推出配對的 obs 檔。
+    兩者理應同時被壓縮，但壓縮中斷時可能一個 .json 一個 .gz，
+    故兩種副檔名都試。找不到回傳 None。"""
+    base = rain_path.name.split(".", 1)[0].replace("rain_", "obs_", 1)
+    for ext in (".json", ".json.gz"):
+        candidate = rain_path.with_name(base + ext)
+        if candidate.exists():
+            return candidate
+    return None
 
 
 # ── 特殊碼轉換 ──────────────────────────────────────────
@@ -159,17 +191,13 @@ ON CONFLICT (station_id, obs_time) DO UPDATE SET
 
 # ── 主流程 ──────────────────────────────────────────────
 
-def fetched_at_from(path):
-    """檔名 rain_20260820T1451+0800.json → aware datetime"""
-    ts = path.stem.split("_", 1)[1]
-    return datetime.strptime(ts, "%Y%m%dT%H%M%z")
-
-
 def load_pair(rain_path, obs_path, cur):
     fetched_at = fetched_at_from(rain_path)
 
-    rain = json.load(open(rain_path, encoding="utf-8"))["records"]["Station"]
-    obs = json.load(open(obs_path, encoding="utf-8"))["records"]["Station"]
+    with open_maybe_gz(rain_path) as f:
+        rain = json.load(f)["records"]["Station"]
+    with open_maybe_gz(obs_path) as f:
+        obs = json.load(f)["records"]["Station"]
 
     # 外鍵順序：測站必須先寫入
     cur.executemany(STATIONS_SQL, [parse_station(s) for s in rain])
@@ -180,15 +208,18 @@ def load_pair(rain_path, obs_path, cur):
 
 
 def main():
-    rain_files = sorted(WEATHER_DIR.glob("rain_*.json"))[-100:]
+    # 同時涵蓋壓縮與未壓縮的檔案。
+    # 檔名前綴相同，故 sorted 後仍為時間順序。
+    rain_files = sorted(
+        list(WEATHER_DIR.glob("rain_*.json"))
+        + list(WEATHER_DIR.glob("rain_*.json.gz"))
+    )[-100:]
 
     with connect() as conn:
         with conn.cursor() as cur:
             for rain_path in rain_files:
-                obs_path = rain_path.with_name(
-                    rain_path.name.replace("rain_", "obs_", 1)
-                )
-                if not obs_path.exists():
+                obs_path = find_obs_counterpart(rain_path)
+                if obs_path is None:
                     print(f"SKIP: no matching obs file for {rain_path.name}")
                     continue
                 try:

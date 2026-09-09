@@ -1,5 +1,5 @@
 import json
-import psycopg
+import gzip
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -36,12 +36,28 @@ SNAPSHOTS_SQL = """
             """
 
 
+def open_maybe_gz(path):
+    """依副檔名決定用 gzip 還是一般開檔。
+    gzip 預設為 binary 模式，需明確指定 'rt' 才能給 json.load。"""
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8")
+    return open(path, "r", encoding="utf-8")
+
+
+def fetched_at_from(path):
+    """檔名 → 抓取時間。
+    ⚠️ 不可用 path.stem：youbike_XXX.json.gz 的 stem 是 youbike_XXX.json，
+    只會剝掉最後一層副檔名。改用第一個 '.' 之前的部分。"""
+    ts_part = path.name.split(".", 1)[0].split("_", 1)[1]
+    return datetime.strptime(ts_part, "%Y%m%dT%H%M%z")
+
+
 def load_one_file(file_path, cur):
-    stem = file_path.stem        
-    ts_part = stem.split("_", 1)[1] 
-    fetched_at = datetime.strptime(ts_part, "%Y%m%dT%H%M%z")
-    with open(file_path, "r", encoding="utf-8") as f:
+    fetched_at = fetched_at_from(file_path)
+
+    with open_maybe_gz(file_path) as f:
         data = json.load(f)
+
     stations_rows = []
     for station in data:
         result = itemgetter('sno', 'sna', 'snaen', 'sarea', 'sareaen', 'ar',
@@ -52,21 +68,29 @@ def load_one_file(file_path, cur):
     for snapshot in data:
         naive = datetime.strptime(snapshot["infoTime"], "%Y-%m-%d %H:%M:%S")
         info_time = naive.replace(tzinfo=ZoneInfo("Asia/Taipei"))
-        
+
         snapshot_rows.append((
             snapshot["sno"],
-            info_time,  
+            info_time,
             snapshot["available_rent_bikes"],
             snapshot["available_return_bikes"],
             snapshot["act"],
             fetched_at,
             fetched_at
         ))
+
     cur.executemany(STATIONS_SQL, stations_rows)
     cur.executemany(SNAPSHOTS_SQL, snapshot_rows)
 
+
 def main():
-    files = sorted(RAW_DIR.glob("youbike_*.json"))[-100:]
+    # 同時涵蓋壓縮與未壓縮的檔案。
+    # 檔名前綴相同，故 sorted 後仍為時間順序。
+    files = sorted(
+        list(RAW_DIR.glob("youbike_*.json"))
+        + list(RAW_DIR.glob("youbike_*.json.gz"))
+    )[-100:]
+
     with connect() as conn:
         with conn.cursor() as cur:
             for f in files:
@@ -75,6 +99,7 @@ def main():
                 except json.JSONDecodeError as e:
                     print(f"SKIP broken file: {f.name} ({e})")
         conn.commit()
+
 
 if __name__ == "__main__":
     main()
