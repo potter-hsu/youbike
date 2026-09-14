@@ -1,5 +1,7 @@
 import json
 import gzip
+import time
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from datetime import datetime
 from db import connect
@@ -187,7 +189,12 @@ ON CONFLICT (station_id, obs_time) DO UPDATE SET
     last_fetched_at   = EXCLUDED.last_fetched_at,
     loaded_at         = now()
 """
-
+LOAD_LOG_SQL = """
+INSERT INTO load_log
+    (fetch_id, started_at, duration_ms,
+     files_processed, files_skipped, rows_affected, error_message)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
+"""
 
 # ── 主流程 ──────────────────────────────────────────────
 
@@ -204,29 +211,66 @@ def load_pair(rain_path, obs_path, cur):
     cur.executemany(STATIONS_SQL, [parse_station(s) for s in obs])
 
     cur.executemany(RAIN_SQL, [parse_rain_obs(s, fetched_at) for s in rain])
+    rows = cur.rowcount
     cur.executemany(WEATHER_SQL, [parse_weather_obs(s, fetched_at) for s in obs])
+    return rows + cur.rowcount
 
 
 def main():
-    # 同時涵蓋壓縮與未壓縮的檔案。
-    # 檔名前綴相同，故 sorted 後仍為時間順序。
+    """天氣管線不寫 fetch_log——該表的欄位（stations_received、update_time）
+    語意為 YouBike 專屬，且天氣一次執行打兩個 API，硬套會產生誤導的值。
+    load_log 的欄位對兩邊都適用，故 fetch_id 留 NULL。"""
+    started_at = datetime.now(ZoneInfo("Asia/Taipei"))
+    t0 = time.monotonic()
+
     rain_files = sorted(
         list(WEATHER_DIR.glob("rain_*.json"))
         + list(WEATHER_DIR.glob("rain_*.json.gz"))
     )[-100:]
 
-    with connect() as conn:
+    processed = 0
+    skipped = 0
+    rows = 0
+    errors = []
+
+    conn = connect()
+    try:
         with conn.cursor() as cur:
             for rain_path in rain_files:
                 obs_path = find_obs_counterpart(rain_path)
                 if obs_path is None:
+                    skipped += 1
+                    errors.append(f"{rain_path.name}: no matching obs file")
                     print(f"SKIP: no matching obs file for {rain_path.name}")
                     continue
                 try:
-                    load_pair(rain_path, obs_path, cur)
+                    rows += load_pair(rain_path, obs_path, cur)
+                    processed += 1
                 except json.JSONDecodeError as e:
+                    skipped += 1
+                    errors.append(f"{rain_path.name}: {e}")
                     print(f"SKIP broken file: {rain_path.name} ({e})")
         conn.commit()
+    except Exception as e:
+        conn.rollback()
+        errors.append(f"{type(e).__name__}: {e}")
+        raise
+    finally:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        # 即使上面 rollback，這一列仍要留下——
+        # 否則程式死掉時連「它試過」都查不到
+        try:
+            with conn.cursor() as cur:
+                cur.execute(LOAD_LOG_SQL, (
+                    None, started_at, duration_ms,
+                    processed, skipped, rows,
+                    "; ".join(errors)[:2000] if errors else None,
+                ))
+            conn.commit()
+        except Exception as e:
+            print(f"WARN: failed to write load_log ({e})")
+        conn.close()
+
 
 
 if __name__ == "__main__":
