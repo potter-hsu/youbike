@@ -1,0 +1,6 @@
+pandas
+pyarrow
+matplotlib
+streamlit
+linearmodels
+statsmodels
