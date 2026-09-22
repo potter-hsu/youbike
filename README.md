@@ -168,7 +168,7 @@ FROM load_log
 WHERE started_at > now() - interval '24 hours'
 GROUP BY 1 ORDER BY 1;
 ```
-
+![系統健康分頁：過去 24 小時每小時的執行次數](docs/images/dashboard_health.png)
 正常為每小時 YouBike 12 次、天氣 6 次、跳過 0。
 
 **這個查詢看的是「每小時有幾筆」，而不是錯誤欄位。**
