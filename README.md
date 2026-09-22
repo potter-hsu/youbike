@@ -15,40 +15,41 @@ YouBike 2.0 API ──┐
                   │                                             │
 中央氣象署 O-A0002 ┤                                             ├──→ PostgreSQL
 （雨量，71 測站）  │  cron */10  fetch_weather.py ──→            │    (Docker on EC2)
-中央氣象署 O-A0003 ┘                data/weather/*.json ────────┘
-（綜觀，9 測站）
-                                                                     │
-                                                    SSH tunnel ──→ 本機 Jupyter 分析
+中央氣象署 O-A0003 ┘                data/weather/*.json ────────┘         │
+（綜觀，9 測站）                            ▲                             │
+                                cron 04:00  gzip（兩天前的檔案）          │
+                                                                    SSH tunnel
+                                                                         │
+                                               本機  Streamlit 儀表板 ／ Jupyter 分析
 ```
 
 抓取與入庫分離：`fetch.py` 只負責取得與落地，抓完再呼叫 `load.py`。
 資料庫故障時 raw 檔案仍完整保留，恢復後由「每次處理最近 100 個檔案」自動補齊。
 
+每次執行皆寫入 `fetch_log` / `load_log`，記錄耗時、處理檔數、跳過檔數與錯誤訊息。
+
 ---
 
 ## 資料規模
-
-截至 2026-09-07：
 
 | 項目 | 數量 |
 |---|---|
 | YouBike 站點 | 1,795 |
 | 氣象測站（臺北市／全臺） | 71 / 1,342 |
-| `snapshots` 觀測 | 5,857,373 |
-| `weather_obs` 觀測 | 3,370,321 |
+| 抓取頻率 | YouBike 每 5 分鐘、天氣每 10 分鐘 |
 | 連續運行 | 自 2026-08-17 21:05 |
 
 ---
 
 ## 技術棧
 
-Python 3 · PostgreSQL 16 · Docker · AWS EC2 · cron · psycopg 3 · pandas · linearmodels
+Python 3 · PostgreSQL 16 · Docker · AWS EC2 · cron · psycopg 3 · pandas · linearmodels · Streamlit
 
 ---
 
 ## 三個關鍵設計決策
 
-完整的 13 條決策與理由見 [`docs/schema_design.md`](docs/schema_design.md)。
+完整的 14 條決策與理由見 [`docs/schema_design.md`](docs/schema_design.md)。
 
 ### 1. 主鍵用 `(sno, info_time)`，不用 `(sno, fetched_at)`
 
@@ -81,6 +82,8 @@ Python 3 · PostgreSQL 16 · Docker · AWS EC2 · cron · psycopg 3 · pandas ·
 > `infoTime` 停在 01 時、207 站停在 00 時，僅 371 站是當下的 11 時。
 > **本設計在此階段運作正常**——沒有新資料就不產生新列，
 > 日均寫入量的下降忠實反映了資料源的停滯，而非系統故障。
+> 若當初選擇 `(sno, fetched_at)`，那兩天照樣會是 20 萬筆漂亮的紀錄，
+> **根本不會發現資料源出了問題**。
 >
 > 第三階段起「天然冪等」仍成立（同一檔案重複處理不產生重複列），
 > 但「不產生假紀錄」失效：失聯逾一年半的東門站開始每天產生 288 筆
@@ -149,6 +152,34 @@ md5: ed19a8c7a0d37a1c4659e51a1987f25f   （兩台完全相同）
 
 ---
 
+## 自我監控
+
+那次故障是**隔 8 小時才發現的**——fetch 的 log 每 5 分鐘都印「saved」，
+看起來一切正常，錯誤藏在 load 的 traceback 裡。
+
+因此抓取與入庫各自寫一張紀錄表，一句 SQL 即可回答「系統過去 24 小時正常嗎」：
+
+```sql
+SELECT date_trunc('hour', started_at) AS hour,
+       count(*) FILTER (WHERE fetch_id IS NOT NULL) AS youbike_runs,
+       count(*) FILTER (WHERE fetch_id IS NULL)     AS weather_runs,
+       sum(files_skipped) AS skipped
+FROM load_log
+WHERE started_at > now() - interval '24 hours'
+GROUP BY 1 ORDER BY 1;
+```
+
+正常為每小時 YouBike 12 次、天氣 6 次、跳過 0。
+
+**這個查詢看的是「每小時有幾筆」，而不是錯誤欄位。**
+設計時第一直覺是查 `files_skipped`，但拿 8/18 的故障當測試案例驗證後發現那是錯的——
+當時 load 每次都直接 crash，**根本沒機會寫 log**。
+最強的故障訊號是記錄消失，不是記錄內容異常。
+
+兩張表拆開也是這次故障逼出來的：若只記 fetch，那 8 小時會顯示 96 筆漂亮的成功紀錄。
+
+---
+
 ## 分析結果
 
 以雙向固定效應（站點 × 10 分鐘時段）估計降雨對站點淨車輛變化的影響，
@@ -181,11 +212,12 @@ md5: ed19a8c7a0d37a1c4659e51a1987f25f   （兩台完全相同）
 
 ```
 src/
-  fetch.py            YouBike 抓取（retry、JSON 完整性驗證）
-  load.py             raw JSON → PostgreSQL（upsert）
+  fetch.py            YouBike 抓取（retry、JSON 完整性驗證、寫入 fetch_log）
+  load.py             raw JSON → PostgreSQL（upsert、支援 gzip、寫入 load_log）
   fetch_weather.py    氣象署兩個資料集抓取
-  load_weather.py     天氣資料入庫（特殊碼轉換）
+  load_weather.py     天氣資料入庫（特殊碼轉換、支援 gzip）
   db.py               連線設定
+  dashboard.py        Streamlit 儀表板（即時狀態、歷史趨勢、降雨效果、系統健康）
 sql/
   schema.sql                核心四表
   weather.sql               天氣兩表
@@ -193,7 +225,7 @@ sql/
   station_temp_map.sql      站點 → 最近綜觀站
   analysis_dataset.sql      分析資料集（三源 join、時間對齊）
 docs/
-  schema_design.md    13 條設計決策與理由
+  schema_design.md    14 條設計決策與理由
 notebooks/
   causal_analysis.ipynb
 ```
