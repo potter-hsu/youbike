@@ -5,7 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from dotenv import load_dotenv
-from load_weather import main
+from load_weather import main as load_main
 load_dotenv()
 API_KEY = os.getenv("CWA_API_KEY")
 class CwaAdapter(HTTPAdapter):
@@ -29,9 +29,9 @@ def fetch_with_retry(dataset_id):
             response.raise_for_status()
             response.json()
             return response
-        
-        except (requests.exceptions.Timeout, 
-                requests.exceptions.ConnectionError, 
+
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
                 requests.exceptions.JSONDecodeError):
             if i != 2:
                 time.sleep(2**i)
@@ -40,13 +40,25 @@ def fetch_with_retry(dataset_id):
 
 BASE = Path(__file__).parent.parent
 RAW_DIR = BASE / "data" / "weather"
-RAW_DIR.mkdir(parents=True, exist_ok=True)
-now = datetime.now(ZoneInfo("Asia/Taipei"))
-for dataset_id, prefix in [("O-A0002-001", "rain"), ("O-A0003-001", "obs")]:
-    response = fetch_with_retry(dataset_id)
-    filename = f"{prefix}_{now.strftime('%Y%m%dT%H%M%z')}.json"
-    path = RAW_DIR / filename
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(response.text)
-    print(f"{now.isoformat()} saved {path.name} ({len(response.text)} bytes)")
-main()
+
+
+def main():
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+
+    # 兩個資料集都抓成功才寫檔：load_weather 以 rain/obs 成對處理，
+    # 只存其中一個會留下孤兒檔（9/26 實測：一個孤兒 rain 檔讓之後 99 次執行都記一筆 skip）
+    responses = {prefix: fetch_with_retry(dataset_id)
+                 for dataset_id, prefix in [("O-A0002-001", "rain"), ("O-A0003-001", "obs")]}
+
+    for prefix, response in responses.items():
+        filename = f"{prefix}_{now.strftime('%Y%m%dT%H%M%z')}.json"
+        path = RAW_DIR / filename
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(response.text)
+        print(f"{now.isoformat()} saved {path.name} ({len(response.text)} bytes)")
+    load_main()
+
+
+if __name__ == "__main__":
+    main()
