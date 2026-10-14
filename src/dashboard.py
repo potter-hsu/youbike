@@ -1,7 +1,7 @@
 """YouBike × 天氣 儀表板
 
 執行方式（需先開 SSH tunnel 連到 EC2 的資料庫）：
-    ssh -i ~/youbike-key.pem -L 5433:localhost:5432 -N ubuntu@18.180.157.155
+    ssh -i <金鑰> -L 5433:localhost:5432 -N ubuntu@<EC2 位址>
     streamlit run src/dashboard.py
 
 本機的 .env 需有 EC2_DB_PASSWORD。
