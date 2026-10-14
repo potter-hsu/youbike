@@ -1,0 +1,13 @@
+# EC2 上 ubuntu 使用者的 crontab（與 `crontab -l` 一致，2026-10-14 匯出）
+# 安裝：crontab deploy/crontab
+#
+# 系統時區為 UTC；檔名的 +0800 由程式以 ZoneInfo("Asia/Taipei") 產生，與 cron 時區無關
+
+# YouBike 抓取，抓完直接呼叫 load.py
+*/5 * * * * /home/ubuntu/youbike/.venv/bin/python /home/ubuntu/youbike/src/fetch.py >> /home/ubuntu/youbike/logs/cron.log 2>&1
+
+# 氣象署雨量 + 綜觀，抓完直接呼叫 load_weather.py
+*/10 * * * * /home/ubuntu/youbike/.venv/bin/python /home/ubuntu/youbike/src/fetch_weather.py >> /home/ubuntu/youbike/logs/weather.log 2>&1
+
+# 壓縮兩天前的 raw 檔（決策 14）：load 只處理最近 100 檔，兩天前的檔案不會再被讀到
+0 4 * * * find /home/ubuntu/youbike/data -name "*.json" -mtime +2 -exec gzip -9 {} + 2>> /home/ubuntu/youbike/logs/compress.log

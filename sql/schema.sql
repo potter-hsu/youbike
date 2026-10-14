@@ -4,7 +4,7 @@
 -- ============================================
 -- 1. stations：站點慢變屬性
 -- ============================================
-CREATE TABLE stations (
+CREATE TABLE IF NOT EXISTS stations (
     sno           text PRIMARY KEY,
     name_zh       text NOT NULL,
     name_en       text,
@@ -22,7 +22,7 @@ CREATE TABLE stations (
 -- ============================================
 -- 2. snapshots：時序觀測值
 -- ============================================
-CREATE TABLE snapshots (
+CREATE TABLE IF NOT EXISTS snapshots (
     sno                    text        NOT NULL REFERENCES stations(sno),
     info_time              timestamptz NOT NULL,
     available_rent_bikes   integer     NOT NULL,
@@ -36,12 +36,12 @@ CREATE TABLE snapshots (
 
 -- 查詢 B：某時刻的全市橫斷面
 -- 主鍵 (sno, info_time) 以 sno 為第一排序鍵，單獨給 info_time 條件時用不到
-CREATE INDEX idx_snapshots_info_time ON snapshots (info_time);
+CREATE INDEX IF NOT EXISTS idx_snapshots_info_time ON snapshots (info_time);
 
 -- ============================================
 -- 3. fetch_log：系統行為紀錄
 -- ============================================
-CREATE TABLE fetch_log (
+CREATE TABLE IF NOT EXISTS fetch_log (
     fetch_id          bigserial PRIMARY KEY,
     started_at        timestamptz NOT NULL DEFAULT now(),
     duration_ms       integer,
@@ -54,7 +54,7 @@ CREATE TABLE fetch_log (
     error_message     text
 );
 
-CREATE TABLE load_log (
+CREATE TABLE IF NOT EXISTS load_log (
     load_id         bigserial PRIMARY KEY,
     fetch_id        bigint REFERENCES fetch_log(fetch_id),
     started_at      timestamptz NOT NULL DEFAULT now(),

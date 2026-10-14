@@ -1,4 +1,4 @@
-CREATE TABLE weather_stations (
+CREATE TABLE IF NOT EXISTS weather_stations (
     station_id      text PRIMARY KEY,
     station_name    text NOT NULL,
     county_name     text NOT NULL,
@@ -10,7 +10,7 @@ CREATE TABLE weather_stations (
     last_seen_at    timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE weather_obs (
+CREATE TABLE IF NOT EXISTS weather_obs (
     station_id             text        NOT NULL REFERENCES weather_stations(station_id),
     obs_time               timestamptz NOT NULL,
     precipitation_10min    real,

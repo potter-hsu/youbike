@@ -1,0 +1,21 @@
+# PostgreSQL 16。密碼讀取同目錄 .env 的 DB_PASSWORD。
+#
+# 首次啟動（資料目錄為空）時會依序執行 initdb 的兩支 schema；
+# 兩張空間對應表需等 stations / weather_stations 有資料後再手動執行（見 README）。
+#
+# 只綁 127.0.0.1：儀表板與 notebook 經 SSH tunnel 連線，不需對外開放
+
+services:
+  db:
+    image: postgres:16
+    container_name: youbike-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: youbike
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is not set in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./sql/weather.sql:/docker-entrypoint-initdb.d/02_weather.sql:ro
