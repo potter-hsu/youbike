@@ -9,6 +9,7 @@
 
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import psycopg
@@ -18,6 +19,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 st.set_page_config(page_title="YouBike × 天氣", layout="wide")
+
+BASE = Path(__file__).parent.parent
 
 
 # ── 連線 ────────────────────────────────────────────────
@@ -196,46 +199,36 @@ with tab_hist:
 # ── 分頁 3：降雨效果 ────────────────────────────────────
 
 with tab_rain:
-    st.subheader("降雨對站點淨車輛變化的效果")
+    st.subheader("降雨對站點活動量的效果")
     st.caption(
-        "雙向固定效應（站點 × 10 分鐘時段），"
-        "標準誤以氣象測站為層級 cluster。樣本期間 2026-08-20 – 08-28。"
+        "雙向固定效應（站點 × 10 分鐘時段），樣本期間 2026-09-01 – 10-13，652 萬筆。"
+        "活動量 = 每 10 分鐘內可借車輛變動的絕對值總和。"
     )
 
-    # 估計結果為離線分析所得（notebooks/causal_analysis.ipynb），
+    # 估計結果為離線分析所得（notebooks/rain_sep_oct.ipynb），
     # 此處為靜態展示——重算需數分鐘，不適合放在互動介面
     result = pd.DataFrame({
-        "降雨分級": ["0.5–1 mm", "1–3 mm", "> 3 mm"],
-        "係數": [0.014, 0.096, 0.185],
-        "標準誤": [0.016, 0.088, 0.094],
-        "p 值": [0.37, 0.28, 0.049],
-        "樣本數": [9096, 1200, 400],
+        "降雨（每 10 分鐘）": ["0.5–1 mm", "1–3 mm", "> 3 mm"],
+        "係數": [-0.21, -0.30, -0.35],
+        "相對無雨": ["−13%", "−19%", "−22%"],
+        "p 值（日期 cluster）": ["< 0.001", "< 0.001", "< 0.001"],
     })
+    st.dataframe(result, use_container_width=True, hide_index=True)
 
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        st.dataframe(result, use_container_width=True, hide_index=True)
-    with c2:
-        st.bar_chart(result.set_index("降雨分級")[["係數"]])
+    st.image(str(BASE / "docs/images/event_study.png"),
+             caption="降雨開始前後的活動量變化（414 個事件）")
 
     st.markdown("""
-**降雨效果呈門檻型，而非線性。**
+**小雨就有效果，降雨開始後 10–20 分鐘最強，約 −25%。**
 
-雨量計最小刻度（0.5 mm）幾乎無影響；效果的成長快於雨量的成長
-（雨量差 5 倍時效果差 7 倍）。線性設定會給出 0.032，
-同時低估強降雨、高估弱降雨。
-
-行為上可解釋為：飄雨不改變決策，下到會淋濕的程度人就不騎，
-再大也不會更不騎。
+8/20–8/28 的初版分析曾得到「門檻型、飄雨無影響」，但以時段 cluster 時不顯著；
+改用平衡面板與活動量重估後，該結論未被複製。
 
 **已知限制**
 
-- 觀測期內僅五個降雨日，皆為夏季午後短時對流，未涵蓋颱風或鋒面
-- 非零降雨觀測中 75% 落在雨量計最小刻度；3 mm 以上僅約 400 筆
-- cluster 處理了站點間的相關，但同一場雨的時間相關未處理
-  → 名義上數十萬觀測，有效獨立處理事件僅數個
-- 應變數為淨變化（借與還的差），下雨時兩者同時減少會互相抵消
-  → 估計值應理解為下界
+- 效果來自局部降雨；全市同時下雨的時段被時段固定效應吸收
+- 安慰劑（兩小時後的雨）小幅未通過，可能是預期行為或量不到的毛毛雨
+- 5 分鐘內同時有借有還時仍會抵消，估計值為下界
 """)
 
 
