@@ -9,6 +9,8 @@
 應有的 16,671 個 5 分鐘抓取時段中缺 5 個（完整率 99.97%）**，皆為零星的單一時段，
 其中 3 次為資料源回傳殘缺 JSON、重試三次仍失敗（見〈一次生產故障〉的來源驗證）。
 
+![Streamlit 儀表板：即時狀態分頁，全市站點分布與可借車輛總數](docs/images/dashboard_overview.jpg)
+
 ---
 
 ## 架構
@@ -177,8 +179,10 @@ FROM load_log
 WHERE started_at > now() - interval '24 hours'
 GROUP BY 1 ORDER BY 1;
 ```
+
 ![系統健康分頁：過去 24 小時每小時的執行次數](docs/images/dashboard_health.png)
-正常為每小時 YouBike 12 次、天氣 6 次、跳過 0。
+
+正常為每小時 YouBike 12 次、天氣 6 次、跳過 0（第一列因查詢窗口切在小時中間而不滿，判斷時排除）。
 
 **這個查詢看的是「每小時有幾筆」，而不是錯誤欄位。**
 設計時第一直覺是查 `files_skipped`，但拿 8/18 的故障當測試案例驗證後發現那是錯的——

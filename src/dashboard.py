@@ -106,7 +106,7 @@ GROUP BY 1 ORDER BY 1
 
 st.title("YouBike × 天氣")
 st.caption(
-    "臺北市 1,795 個站點每 5 分鐘、氣象署 71 個測站每 10 分鐘，"
+    "臺北市 YouBike 2.0 全站（約 1,800 站）每 5 分鐘、氣象署 71 個測站每 10 分鐘，"
     "自 2026-08-17 起連續運行於 AWS EC2"
 )
 
@@ -259,10 +259,13 @@ with tab_health:
         c3.metric("最長耗時", f"{int(health['max_ms'].max()) / 1000:.1f} s")
 
         st.dataframe(
-            health.rename(columns={
+            health.assign(
+                hour=health["hour"].dt.strftime("%m/%d %H:00"),
+                max_ms=(health["max_ms"] / 1000).round(1),
+            ).rename(columns={
                 "hour": "時間", "youbike_runs": "YouBike",
                 "weather_runs": "天氣", "skipped": "跳過",
-                "max_ms": "最長耗時(ms)",
+                "max_ms": "最長耗時 (s)",
             }),
             use_container_width=True, hide_index=True,
         )
