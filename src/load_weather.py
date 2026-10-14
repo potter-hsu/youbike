@@ -50,7 +50,9 @@ PRECIP_SPECIAL = {
     "X":   (None, "X"),    # 儀器故障
 }
 
-NUM_SPECIAL = {"-99", "X", "990"}
+# ⚠️ 特殊碼必須以數值比對：實測風向的「990」以 "990.0" 回傳，
+#    字串比對會讓它被當成 990° 存進資料庫
+NUM_SPECIAL = {-99.0, 990.0, -990.0}   # 990：風向不定
 
 
 def parse_precip(raw):
@@ -58,25 +60,28 @@ def parse_precip(raw):
     if raw is None:
         return None, None
     raw = raw.strip()
-    if raw in PRECIP_SPECIAL:
-        return PRECIP_SPECIAL[raw]
     try:
-        return float(raw), None
+        value = float(raw)
     except ValueError:
-        return None, raw        # 未知代碼：存原字串，之後查得出來
+        # "T"、"X" 或未知代碼：未知者存原字串，之後查得出來
+        return PRECIP_SPECIAL.get(raw, (None, raw))
+    code = f"{value:g}"         # "-98.0" → "-98"，與 NUM_SPECIAL 同理
+    if code in PRECIP_SPECIAL:
+        return PRECIP_SPECIAL[code]
+    if value < 0:
+        return None, raw        # 未知的負值代碼
+    return value, None
 
 
 def parse_num(raw):
     """溫濕風等要素 → 數值。特殊碼一律 None（不做 flag）。"""
     if raw is None:
         return None
-    raw = raw.strip()
-    if raw in NUM_SPECIAL:
-        return None
     try:
-        return float(raw)
+        value = float(raw.strip())
     except ValueError:
-        return None
+        return None             # "X" 等文字代碼
+    return None if value in NUM_SPECIAL else value
 
 
 def parse_text(raw):
