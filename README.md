@@ -1,9 +1,13 @@
 # YouBike × 天氣：即時資料管線與降雨效果的因果分析
 
+![test](https://github.com/potter-hsu/youbike/actions/workflows/test.yml/badge.svg)
+
 每 5 分鐘抓取臺北市 YouBike 2.0 全站狀態、每 10 分鐘抓取中央氣象署觀測，
 落地為 raw JSON 後寫入 PostgreSQL，用於估計降雨對單車使用量的因果效果。
 
-**系統自 2026-08-17 起部署於 AWS EC2，連續運行中。**
+**系統自 2026-08-17 起部署於 AWS EC2。截至 2026-10-14 連續運行 58 天，
+應有的 16,671 個 5 分鐘抓取時段中缺 5 個（完整率 99.97%）**，皆為零星的單一時段，
+其中 3 次為資料源回傳殘缺 JSON、重試三次仍失敗（見〈一次生產故障〉的來源驗證）。
 
 ---
 
@@ -37,7 +41,9 @@ YouBike 2.0 API ──┐
 | YouBike 站點 | 1,795 |
 | 氣象測站（臺北市／全臺） | 71 / 1,342 |
 | 抓取頻率 | YouBike 每 5 分鐘、天氣每 10 分鐘 |
-| 連續運行 | 自 2026-08-17 21:05 |
+| 連續運行 | 自 2026-08-17 21:05，58 天（截至 10/14） |
+| `snapshots` 列數 | 2,522 萬 |
+| raw 檔 | YouBike 16,667 個、天氣 15,833 個，全數保留（兩天前的檔案 gzip，合計 4.0 GB） |
 
 ---
 
@@ -178,6 +184,10 @@ GROUP BY 1 ORDER BY 1;
 
 兩張表拆開也是這次故障逼出來的：若只記 fetch，那 8 小時會顯示 96 筆漂亮的成功紀錄。
 
+**紀錄表抓到的另一個問題**：9/26 00:10 的雨量檔存了、綜觀檔卻抓取失敗，
+留下的孤兒檔讓之後 99 次執行各記一筆 skip，直到它滑出「最近 100 檔」的範圍。
+資料沒有遺失，但根因在 `fetch_weather.py` 先存一檔再抓另一檔，已改為兩者都成功才寫檔。
+
 ---
 
 ## 分析結果
@@ -208,6 +218,28 @@ GROUP BY 1 ORDER BY 1;
 
 ---
 
+## 部署
+
+```bash
+git clone https://github.com/potter-hsu/youbike.git ~/youbike && cd ~/youbike
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env              # 填入 DB_PASSWORD、CWA_API_KEY（氣象署開放資料平臺申請）
+
+docker compose up -d              # PostgreSQL 16；首次啟動自動建立 schema.sql、weather.sql 的表
+crontab deploy/crontab            # 開始每 5 / 10 分鐘抓取
+
+# 跑過一輪、stations 與 weather_stations 有資料後，建立兩張空間對應表
+docker exec -i youbike-db psql -U postgres -d youbike < sql/station_weather_map.sql
+docker exec -i youbike-db psql -U postgres -d youbike < sql/station_temp_map.sql
+```
+
+`deploy/crontab` 的路徑以 `/home/ubuntu/youbike` 為準。
+儀表板與 notebook 在本機執行，經 SSH tunnel（本機 5433 → EC2 5432）連線，故 compose 設定只將資料庫綁在 127.0.0.1。
+
+測試：`pip install pytest && pytest`（不需資料庫）。
+
+---
+
 ## 專案結構
 
 ```
@@ -224,6 +256,11 @@ sql/
   station_weather_map.sql   站點 → 最近雨量站（Haversine）
   station_temp_map.sql      站點 → 最近綜觀站
   analysis_dataset.sql      分析資料集（三源 join、時間對齊）
+  station_activity.sql      站點 × 10 分鐘活動量（8/31 之後的資料）
+  fix_special_codes.sql     一次性修正：先前以字串比對存入的特殊碼
+tests/                      解析與入庫的單元測試（GitHub Actions：Python 3.10 / 3.14）
+deploy/crontab              EC2 上的排程
+docker-compose.yml          PostgreSQL
 docs/
   schema_design.md    14 條設計決策與理由
 notebooks/
